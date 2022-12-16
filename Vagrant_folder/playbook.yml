@@ -1,0 +1,140 @@
+---
+- hosts: all
+  become: true
+  vars_files:
+    - defaults/main.yml
+
+  tasks:
+  - name: install repo percona
+    yum:
+      name: https://repo.percona.com/yum/percona-release-latest.noarch.rpm
+      state: present
+
+  - name: install percona server
+    yum:
+      name:
+        - Percona-Server-server-57
+        - MySQL-python
+      state: present
+
+  - name: copy config file
+    copy:
+      src: conf/conf.d/{{ item }}
+      dest: /etc/my.cnf.d/
+      owner: mysql
+      group: mysql
+    with_items:
+      - 02-max-connections.cnf
+      - 03-performance.cnf
+      - 04-slow-query.cnf
+      - 05-binlog.cnf
+
+  - name: copy 01-base.cnf
+    template:
+      src: conf/conf.d/01-base.cnf
+      dest: /etc/my.cnf.d/01-base.cnf
+      owner: mysql
+      group: mysql
+
+  - name: replication ignore on slave
+    blockinfile:
+      path: /etc/my.cnf.d/05-binlog.cnf
+      insertbefore: BOF
+      block: |
+        replicate-ignore-table=bet.events_on_demand
+        replicate-ignore-table=bet.v_same_event
+    when: ansible_hostname=='slave'
+
+  - name: start mysql
+    systemd:
+      name: mysql
+      state: started
+      enabled: yes
+
+  - name: find mysql password
+    shell:
+      cmd: cat /var/log/mysqld.log | grep 'root@localhost:' | awk '{print $11}'
+    register: root_password
+
+  - name: update expired root user password
+    command: mysql --user root --password='{{ root_password.stdout }}' --connect-expired-password --execute="ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '{{ mysql_root_password }}';"
+
+- hosts: master
+  become: true
+  vars_files:
+    - defaults/main.yml
+
+  tasks:
+  - name: Create new databases with name bet
+    mysql_db:
+      name: bet
+      state: present
+      login_user: root
+      login_password: "{{ mysql_root_password }}"
+
+  - name: Restore database
+    mysql_db:
+      name: bet
+      state: import
+      target: /vagrant/bet.dmp
+      login_user: root
+      login_password: "{{ mysql_root_password }}"
+
+  - name: create repl user
+    mysql_user:
+      name: repl
+      password: "{{ mysql_repl_password }}"
+      priv: '*.*:ALL,GRANT'
+      state: present
+      login_user: root
+      login_password: "{{ mysql_root_password }}"
+
+  - name: GRANT REPLICATION SLAVE
+    command: mysql -uroot --password='{{ mysql_root_password }}' -e "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY '{{ mysql_repl_password }}'"
+
+  - name: dump database
+    shell: mysqldump --all-databases --triggers --routines --master-data --ignore-table=bet.events_on_demand --ignore-table=bet.v_same_event  -uroot --password='{{ mysql_root_password }}' > /tmp/master.sql
+
+  - name: Copy dump
+    fetch:
+      src: /tmp/master.sql
+      dest: ./
+      flat: yes
+
+- hosts: slave
+  become: true
+  vars_files:
+    - defaults/main.yml
+
+  tasks:
+  - name: Restore database
+    mysql_db:
+      name: bet
+      state: import
+      target: /vagrant/master.sql
+      login_user: root
+      login_password: "{{ mysql_root_password }}"
+
+  - name: enable gtid_mode=ON
+    shell: |
+      mysql -uroot --password='{{ mysql_root_password }}' -e "SET GLOBAL enforce_gtid_consistency='ON';"
+      mysql -uroot --password='{{ mysql_root_password }}' -e "SET GLOBAL gtid_mode='OFF_PERMISSIVE';"
+      mysql -uroot --password='{{ mysql_root_password }}' -e "SET GLOBAL gtid_mode='ON_PERMISSIVE';"
+      mysql -uroot --password='{{ mysql_root_password }}' -e "SET GLOBAL gtid_mode='ON';"
+
+  - name: Change primary
+    mysql_replication:
+      mode: changeprimary
+      primary_host: 192.168.11.150
+      primary_port: 3306
+      primary_user: repl
+      primary_password: "{{ mysql_repl_password }}"
+      primary_auto_position: true
+      login_user: root
+      login_password: "{{ mysql_root_password }}"
+
+  - name: Start MariaDB replica with connection name primary-1
+    mysql_replication:
+      mode: startreplica
+      login_user: root
+      login_password: "{{ mysql_root_password }}"
