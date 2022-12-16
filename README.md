@@ -33,17 +33,17 @@ mysql -p'Otus-Linux2019' -D bet -e "SELECT * FROM bookmaker";
 
 ## Проверка работы
 
-1. Master
+1. Master  
 Заходим на Master и выполняем запрос  
 ```
 [root@master ~]# mysql -p'Otus-Linux2019' -D bet -e "INSERT INTO bookmaker (id, bookmaker_name) VALUES('1','1xbet')";
 ```
 
-2. Slave
+2. Slave  
 Проверяем что репликация выполняетсяна slave  
 ![Image 1](https://github.com/ballrak86/27-homeWork/blob/main/screenshots/check_replication1.jpg)
 
-Проверяем что данные появлись на slave
-![Image 2](https://github.com/ballrak86/27-homeWork/blob/main/screenshots/check_replication2.jpg)
+Проверяем что данные появлись на slave  
+![Image 2](https://github.com/ballrak86/27-homeWork/blob/main/screenshots/check_replication2.JPG)
 
 📚Домашнее задание/проектная работа разработано(-на) для курса ["Administrator Linux. Professional"](https://otus.ru/lessons/linux-professional/)
